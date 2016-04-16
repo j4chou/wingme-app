@@ -5,6 +5,7 @@ var router = express.Router();
 var knex = require('../db/config').knex;
 var auth = require('../modules/auth');
 var _ = require('underscore');
+var wings = require('../modules/wingHelpers');
 
 
 /**
@@ -199,47 +200,26 @@ router.get('/current', function(req, res) {
     });
 });
 
-router.post('/current', function(req, res) {
-  var tokenObj = auth.decode(req.headers['x-access-token']);
-  var clientID = tokenObj.ID;
+router.post('/current', function(req, res){
+  // var tokenObj = auth.decode(req.headers['x-access-token']);
+  // var clientID = tokenObj.ID;
   var targetID = req.body.targetID;
   var requestStatus = req.body.status;
 
-  // testing
-  // var clientID = req.headers.clientid;
+  // // testing
+  var clientID = req.headers.clientid;
 
-  console.log(requestStatus);
-
-  knex('duos')
-    .where({uID1: clientID, uID2: targetID})
-    .select('ID')
-    .then(function(resp) {
-      return resp[0].ID;
-    })
-
+    wings.getClientDID(clientID, targetID)
     .then(function(duoID) {
-      knex('duos') // set duoID2 to the target's duo ID
-        .where('ID', duoID)
-        .select('cwStatus')
+      wings.getCwStatus(duoID)
         .then(function(status) { 
-          knex('duos')
-            .where('uID1', targetID)
-            .andWhere('uID2', clientID)
-            .select('ID')
-            .then(function(id) {
-              if (id.length > 0) {
-                return id[0].ID;
-              }
-            })
+          wings.getTargetDID(targetID, clientID)
             .then(function(duoID2) {
                 if (status[0].cwStatus === 'pending') { // clientDuoID's cwStatus
                   if (requestStatus === 'accepted') {
-                    knex('duos')
-                      .where('ID', duoID)
-                      .update({
-                        cwStatus: 'active'
-                      })
+                    wings.setActive(duoID)
                       .then(function(resp) {
+                        console.log('227: Resp is', resp)
                         knex('duos')
                           .whereIn('uID1', [clientID, targetID])
                           .orWhereIn('uID2', [clientID, targetID])
@@ -258,51 +238,34 @@ router.post('/current', function(req, res) {
                             knex('duos')
                               .whereIn('ID', idarray)
                               .update({ cwStatus: null })
-                              .then(function() {
-                                res.send({
-                                  message: 'All your other wing requests have their status set to null.'
-                                });
+                              .then(function(resp) {
+                                sendJSON(res, true, 'All your other wing requests have their status set to null.', resp);
                               })
                           })
                       });
                   } else if (requestStatus === 'rejected') {
-                    knex('duos')
-                      .where(function() {
-                        this.where('ID', duoID)
-                        .orWhere('ID', duoID2)
-                      })
+                    wings.findOtherDuos(duoID, duoID2)
                       .select('ID')
                       .update({ cwStatus: null })
-                      .then(function() {
-                        res.send({
-                          message: 'You have rejected this wing request.'
-                        });
+                      .then(function(resp) {
+                        sendJSON(res, true, 'You\'ve rejected this wing request', resp);
                       }) 
                   } 
               } else if (status[0].cwStatus === null) {
                   if (requestStatus === 'accepted') {
-                    knex('duos')
-                      .where('ID',duoID)
-                      .select('ID')
-                      .update({ cwStatus : 'active' })
-                      .then(function(){
-                        console.log('Client Duo ID has been updated to active.')
-                      });
-
-                    knex('duos')
-                      .where({uID1: targetID, uID2: clientID})
-                      .update({ cwStatus : 'pending' }) 
-                      .then(function(resp) {
-                        res.send({
-                          message: 'Client Duo ID updated to active. Target Duo ID status updated to pending.'
-                        });
+                    wings.setActive(duoID)
+                    .then(function(){
+                    wings.setPending(targetID,clientID)
+                    .then(function(resp){
+                        sendJSON(res, true, 'You\'ve requested this wing/Client Duo ID updated to active. Target Duo ID status updated to pending.', resp);
+                      })
                       });
                   }
                 }
             });
         })
     })
-})
+});
 
 
 function sendJSON(res, success, message, results) {
